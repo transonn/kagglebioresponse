@@ -9,8 +9,17 @@ library(ggplot2) #pretty plotting
 library(nnet) #neural networks
 library(caret) #helpful stats functions
 
+#FUNCTION checkerror: calculate log loss error.
+checkerror <- function(y, yhat) {
+	N <- length(y)
+	eps <- 1e-15	
+	yhat <- pmin(pmax(yhat, eps), 1-eps) #cap predictions, prevents log(0)
+	error <- -1/N * sum(y*log(yhat) + (1-y)*log(1-yhat), na.rm=T)
+	return(error)
+}
+
 data <- read.csv("train.csv") #read training data
-attach(data)
+#attach(data)
 
 #split training data into training and test sets, 70% training, 30% testing
 set.seed(1)
@@ -21,52 +30,46 @@ testset <- data[-trainindex,]
 
 y <- trainset[,1] #Activity column
 x <- trainset[,-1] #all other columns
+correlations <- cor(x, y) #correlation of all features relative to Activity
+correlations[is.na(correlations)] <- 0 #replace NAs with 0 (no variance)
 
-y <- data[,1] #Activity column
-x <- data[,-1] #all other columns
-correlations <- cor(x,y) #correlation of all features relative to Activity
-
-#fit gaussian to correlations, set bounds for top 5%
+#fit gaussian to correlations, set bounds for top 5% (lol is this a good idea?)
 cormean <- mean(correlations)
 corsd <- sd(correlations)
-corupper <- qnorm(.95, mean=cormean, sd=corsd)
+corupper <- qnorm(.999, mean=cormean, sd=corsd)
 corlower <- qnorm(.05, mean=cormean, sd=corsd)
 
 #find features that correlate the most with Activity
-#significants <- which(correlations > actupper | correlations < actlower, arr.ind=T)
+#significants <- which(correlations > actupper | correlations < actlower)
 significants <- which(correlations > corupper)
-#significantsorted <- sort(correlations[significants], decreasing=TRUE)
 
 #create matrix of relevant features
-#features <- get(names(significantsorted[1]))
-#for (i in 2:length(significantsorted)) {
-#	features <- cbind(features, get(names(significantsorted[i])))
-#}
+features <- x[,significants]
 
-#neural network based off previously found features
-a <- nnet(features, Activity, entropy=T, size=4, maxit=2000, MaxNWts=1500)
-prediction <- a$fitted.values #prediction results
+#fit neural network based off relevant features
+a <- nnet(features, y, linout=T, size=1, maxit=2000, MaxNWts=1500)
+yhattrain <- a$fitted.values #prediction results
+yhattrain <- pmin(pmax(yhattrain, .05), .95) #cap predictions
+checkerror(y, yhattrain)
+
+#use previously created neural network on test set features
+xtest <- testset[,-1]
+ytest <- testset[,1]
+yhattest <- predict(a, xtest[,significants])
+yhattest <- pmin(pmax(yhattest, .05), .95) #cap predictions
+checkerror(ytest, yhattest)
 
 #visualize prediction vs results
-ggplot() + geom_point(aes(1:40,prediction[1:40]), colour="blue") + geom_point(aes(1:40,Activity[1:40]), colour="red")
+ggplot() + geom_point(aes(1:40,yhattrain[1:40]), colour="blue") + geom_point(aes(1:40,y[1:40]), colour="red")
 
-#check error
-N <- length(Activity)
-error <- -1/N * sum(Activity*log(prediction) + (1-Activity)*log(1-prediction), na.rm=T)
-print(error)
+ggplot() + geom_point(aes(1:40,yhattest[1:40]), colour="blue") + geom_point(aes(1:40,ytest[1:40]), colour="red")
+
 
 #-----------------REAL MODELING FOR REAL-----------------
-testdata <- read.csv("test.csv") #read testing data
-detach(data)
-attach(testdata)
+testdata <- read.csv("test.csv") #read test data
 
-#create matrix of relevant features from testing set
-features <- get(names(significantsorted[1]))
-for (i in 2:length(significantsorted)) {
-	features <- cbind(features, get(names(significantsorted[i])))
-}
+testfeatures <- testdata[,significants]
+#use ANN on test set
+yhat <- predict(a, testfeatures)
 
-#use previously created neural network on testing set features
-yhat <- predict(a, features)
-
-write(yhat,"20120407-1.csv", ncolumns=1)
+write(yhat,"20120407-2.csv", ncolumns=1)
